@@ -1,5 +1,7 @@
 import socket
+import json
 import time
+from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 from mttkinter import mtTkinter as tkinter
 from config import *
@@ -15,9 +17,11 @@ class Client2:
         # 连接到指定服务器
         self.client.connect((SERVER_IP, SERVER_PORT))
         # 客户端网名
-        self.nickname=''
+        self.nickname = ''
         # 客户端账号
-        self.username=''
+        self.username = ''
+        # 目标对象
+        self.target = 'all'
 
         # 创建并初始化登录界面
         self.draw_login_win()
@@ -27,6 +31,8 @@ class Client2:
         self.chat.withdraw()
         # 显示登录界面
         self.root.mainloop()
+        self.get_user_list()
+
 
     def login(self):
         # 获取账号和密码
@@ -45,20 +51,21 @@ class Client2:
         # 2|username|nickname|登录成功!  3|fail|登录失败!
         response_msg = self.client.recv(1024).decode('utf-8').split('|')
         # 登录成功
-        if response_msg[0] == '2':
+        if response_msg[0] == '00':
             tkinter.messagebox.showinfo('正确', '登录成功')
             self.nickname = response_msg[2]
             self.username = response_msg[1]
             # 隐藏登录窗口
             self.root.withdraw()
             # 显示聊天窗口
-            self.chat.title("qq-聊天室   qq:%s  网名:%s" %(self.username,self.nickname))
+            self.chat.title("qq-聊天室         qq:%s             网名:%s" %(self.username,self.nickname))
             self.chat.deiconify()
             # 开启子线程去不断接收服务器的消息
             t = Thread(target=self.recv_msg, args=())
             t.daemon = True
             t.start()
-        elif response_msg[0] == '3':
+            self.get_user_list()
+        elif response_msg[0] == '01':
             tkinter.messagebox.showinfo('错误', '账号不存在或密码错误!')
 
     # 发送聊天消息到服务器
@@ -67,19 +74,47 @@ class Client2:
         message = self.chat_area.get(0.0, END)
         self.clear_chat()
         # 发送聊天请求给服务器
-        # 1|username|nickname|message 聊天请求格式
-        chat_msg = '1|' + self.username + '|' + self.nickname + '|' + message
+        # 1|username|nickname|message|target 聊天请求格式
+        chat_msg = '1|' + self.username + '|' + self.nickname + '|' + message + '|' + self.target
         self.client.send(chat_msg.encode('utf-8'))
 
 
     # 从服务器接收消息
     def recv_msg(self):
         while True:
-            # 将从服务器收到的信息打印在聊天界面
+            # 判断响应消息类型 (2,3,5)|message 2-普通消息 3-用户上下线消息 5-用户列表消息
             now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) # 当前时间
-            response_msg = self.client.recv(1024).decode('utf-8')
+            response_msg = self.client.recv(1024).decode('utf-8').split('|')
+            # 如果是用户上下线消息，需要重新获取在线用户列表，发送获取请求
+            if (response_msg[0] == '3'):
+                self.get_user_list()
+            # 从客户端返回用户列表的 json 字符串
+            elif (response_msg[0] == '5'):
+                self.users = json.loads(response_msg[1].encode('utf-8'))
+                print(self.users)
+                # 刷新在线用户下拉框和在线用户列表
+                list = ['all']
+                self.user_alive.delete(0.0, END)
+                for user, nickname in self.users.items():
+                    if (user != self.username):
+                        str = user + '|' + nickname
+                        list.append(str)
+                        self.user_alive.insert(tkinter.END, str + '\n')
+                # 将列表转化为元组
+                tup = tuple(list)
+                self.user_list['value'] = tup
+                self.user_list.current(0)
+                continue
+
+            # 将从服务器收到的信息打印在聊天界面
             self.scroll.insert(tkinter.END, now + "\n", 'green')
-            self.scroll.insert(tkinter.END, response_msg+"\n")
+            self.scroll.insert(tkinter.END, response_msg[1]+"\n")
+
+    # 发送获取用户列表请求
+    def get_user_list(self):
+        request_msg = '4|get_user_list'
+        self.client.send(request_msg.encode('utf-8'))
+
 
     # 创建登录窗口
     def draw_login_win(self):
@@ -123,7 +158,7 @@ class Client2:
     def draw_chat_win(self):
         self.chat = Tk()
         self.chat.title("QQ-聊天室")
-        self.chat.geometry("580x430")
+        self.chat.geometry("750x450")
 
         # self.root.resizable(False)
         # 创建滚动文本框（聊天界面）
@@ -135,7 +170,7 @@ class Client2:
         self.scroll.tag_config('green', foreground='#09F738')
         self.scroll.tag_config('red', foreground='red')
 
-        # 格式化成 2016-03-20 11:45:39 形式
+        # 格式化成 2021-05-27 11:45:39 形式
         now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         self.scroll.insert(tkinter.END, "欢迎进入聊天室，请畅所欲言!\n", 'red')
 
@@ -143,11 +178,46 @@ class Client2:
         self.chat_area = Text(self.chat)
         self.chat_area['width'] = 80
         self.chat_area['height'] = 6
-        self.chat_area.grid(row=1, column=0, pady=10)
-
+        self.chat_area.grid(row=1, column=0, pady=27)
+        # 发送按钮
         self.login_button = Button(self.chat, text="发送", command=self.send_msg)
-        self.login_button.place(x=270, y=390)
+        self.login_button.place(x=260, y=415)
+        # 在线用户下拉框
+        self.label = Label(self.chat, text='聊天对象')
+        self.label.place(x=10, y=305)
+        # 创建变量，便于取值
+        self.comvalue = StringVar()
+        # 创建下拉框
+        self.user_list = ttk.Combobox(self.chat, textvariable=self.comvalue)
+        # 设置选项值
+        self.user_list['value'] = ('all',)
+        # 设置为活跃状态（下拉框的选项可变）
+        self.user_list.config(state=ACTIVE)
+        # 初始选中值
+        self.user_list.current(0)
+
+        # 在线用户列表
+        self.user_label = Label(self.chat, text='在线用户')
+        self.user_label.place(x=585, y=5)
+        self.user_alive = ScrolledText(self.chat)
+        self.user_alive['height'] = 30
+        self.user_alive['width'] = 20
+        self.user_alive.grid(row=0, column=0, columnspan=2)
+        self.user_alive.place(x=585 ,y=25)
+
+        # 刷新按钮
+        #self.flush_button = Button(self.chat, text="刷新", commmand=self.get_user_list())
+        # 绑定选中事件
+        self.user_list.bind("<<ComboboxSelected>>", self.select_target)
+        self.user_list.place(x=70, y=305)
+        # 指定窗口关闭事件
         self.chat.protocol("WM_DELETE_WINDOW", self.callback)
+
+    def select_target(self, *args):
+        # 将目标对象 target 置为选中的值
+        self.target = self.user_list.get()
+        print(self.target)
+
 
     # 窗口关闭事件（释放资源）
     def callback(self):
@@ -157,7 +227,7 @@ class Client2:
     # 清空聊天输入框
     def clear_chat(self):
         self.chat_area.delete(0.0, END)
-    # 情况登录框
+    # 清空登录框
     def clear_login(self):
         self.input_account.delete(0, END)
         self.input_password.delete(0, END)
